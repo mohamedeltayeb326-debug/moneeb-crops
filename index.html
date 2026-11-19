@@ -770,8 +770,23 @@
       }
     }
 
-    function onIncompletePaymentFound(payment) {
+    // Automatically resolve any stuck incomplete payment from earlier attempts
+    async function onIncompletePaymentFound(payment) {
       console.log('Incomplete Pi payment found:', payment);
+      try {
+        const hasTx = Boolean(payment.transaction && payment.transaction.txid);
+        await fetch('/api/pi-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: hasTx ? 'complete' : 'approve',
+            paymentId: payment.identifier,
+            txid: hasTx ? payment.transaction.txid : undefined
+          })
+        });
+      } catch (err) {
+        console.error('Failed to resolve incomplete payment:', err);
+      }
     }
 
     // 8. Language Switcher (Arabic RTL <-> English LTR)
@@ -783,7 +798,6 @@
 
       document.getElementById('langToggleText').textContent = currentLang === 'ar' ? 'English' : 'العربية';
 
-      // Update static texts
       document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
         if (i18n[currentLang][key]) {
@@ -791,7 +805,6 @@
         }
       });
 
-      // Update placeholders
       document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
         const key = el.getAttribute('data-i18n-placeholder');
         if (i18n[currentLang][key]) {
@@ -824,7 +837,6 @@
           </div>
         `;
       }).join('');
-      // Duplicate content for seamless continuous marquee loop
       track.innerHTML = itemsHtml + itemsHtml;
     }
 
@@ -1074,20 +1086,32 @@
             {
               onReadyForServerApproval: async function (paymentId) {
                 statusBox.textContent = currentLang === 'ar'
-                  ? `🔄 بانتظار تأكيد الشبكة (Payment ID: ${paymentId.slice(0, 10)})...`
-                  : `🔄 Awaiting network approval (Payment ID: ${paymentId.slice(0, 10)})...`;
-                await fetch('/api/pi-payment', {
+                  ? `🔄 بانتظار تأكيد الخادم (Payment ID: ${paymentId.slice(0, 10)})...`
+                  : `🔄 Awaiting server approval (Payment ID: ${paymentId.slice(0, 10)})...`;
+
+                const res = await fetch('/api/pi-payment', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ action: 'approve', paymentId })
                 });
+
+                if (!res.ok) {
+                  const errData = await res.json().catch(() => ({}));
+                  throw new Error(errData.error || errData.message || `Server approval failed (${res.status})`);
+                }
               },
               onReadyForServerCompletion: async function (paymentId, txid) {
-                await fetch('/api/pi-payment', {
+                const res = await fetch('/api/pi-payment', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ action: 'complete', paymentId, txid })
                 });
+
+                if (!res.ok) {
+                  const errData = await res.json().catch(() => ({}));
+                  throw new Error(errData.error || errData.message || `Server completion failed (${res.status})`);
+                }
+
                 finalizeOrderSuccess(orderId, cropTitle, grandTotal, txid);
               },
               onCancel: function () {
@@ -1115,8 +1139,8 @@
       } catch (err) {
         statusBox.className = 'p-3.5 rounded-xl text-xs font-bold bg-rose-50 border border-rose-200 text-rose-700 block';
         statusBox.textContent = currentLang === 'ar'
-          ? `❌ حدث خطأ: ${err.message}`
-          : `❌ Error: ${err.message}`;
+          ? `❌ فشل الاتصال بالخادم: ${err.message}`
+          : `❌ Server connection failed: ${err.message}`;
         payBtn.disabled = false;
         payBtn.classList.remove('opacity-60', 'cursor-not-allowed');
       }
